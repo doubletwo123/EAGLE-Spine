@@ -1,0 +1,239 @@
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[UTF8]{ctex}
+\usepackage{geometry}
+\usepackage{amsmath,amssymb,amsfonts,bm}
+\usepackage{setspace}
+\usepackage[numbers,sort&compress]{natbib}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\geometry{left=2.3cm,right=2.3cm,top=2.2cm,bottom=2.2cm}
+\setstretch{1.25}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1 \right\rVert}
+\newcommand{\ip}[2]{\left\langle #1, #2 \right\rangle}
+\newcommand{\conv}{\ast}
+\newcommand{\odotop}{\odot}
+
+\title{\textbf{EAGLE-Spine：Energy-Adaptive Geometry-Loop-free Enhancement for Spine Landmark Detection}}
+\author{\textit{For Early-stage Theoretical Derivation and Novelty Check}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+
+% =========================================================
+% EAGLE-Spine：Energy-Adaptive Geometry-Loop-free Enhancement for Spine Landmark Detection
+% 中文Method草稿（用于理论推导与验证）
+% 说明：不突出“单任务/多任务”，以“关键点为主、可选几何头”为统一框架描述
+% =========================================================
+
+\section{方法（Method）}
+
+\subsection{方法概述与命名}
+我们提出 \textbf{EAGLE-Spine}（Energy-Adaptive Geometry-Loop-free Enhancement），面向脊柱X-ray中的椎体角点/关键点定位与链式几何一致性建模。EAGLE-Spine 的核心思想是：在\textbf{动态采样算子}与\textbf{结构连续性正则}两条线上引入\emph{尺度无关（scale-free）}与\emph{环路无关（loop-free）}的约束机制，从而在低质、遮挡、端椎体困难等场景下提升关键点稳定性，并降低由过平滑引起的病理偏差。
+
+整体上，EAGLE-Spine 包含两项关键机制：
+\begin{itemize}
+    \item \textbf{SREG（Scale-free Relative Energy Gating）}：无量纲相对能量门控，基于中心线局部转角能量构造门控系数，调节连续性正则强度，避免病理奇点被抹平；
+    \item \textbf{LODA-Conv (loop-free orthogonal deformable alignment }conv): 环路无关的正交散布约束可变形卷积，通过法向散布先验引导采样覆盖椎体块状结构，同时切断由预测几何量引入的梯度循环风险。
+\end{itemize}
+
+\subsection{问题定义与符号约定}
+给定一张脊柱正位X-ray图像 $I\in\mathbb{R}^{H\times W}$，我们预测 $N$ 个椎体的关键点集合。每个椎体标注 $Q$ 个关键点（典型取 $Q=4$ 个角点），总关键点数 $M=NQ$。第 $i$ 个椎体的关键点为
+\begin{equation}
+\mathcal{K}_i=\{\mathbf{k}^{(1)}_i,\mathbf{k}^{(2)}_i,\dots,\mathbf{k}^{(Q)}_i\},\quad 
+\mathbf{k}^{(m)}_i=(x^{(m)}_i,y^{(m)}_i)^\top.
+\end{equation}
+网络输出关键点热力图 $\hat{H}\in\mathbb{R}^{M\times H'\times W'}$。必要时，可选地输出轻量几何参数（例如中心点置信度或形状比），但EAGLE-Spine 的核心机制不依赖“多任务设计”为前提。
+
+\subsection{整体架构}
+EAGLE-Spine 由 Backbone、LODA-Conv 增强块与 Landmark Decoder 组成：
+\begin{equation}
+\{F^s\}_{s=1}^S = \Phi(I), \qquad
+\{\hat{F}^s\}_{s=1}^S = \Gamma(\{F^s\}; \text{LODA-Conv}), \qquad
+\hat{H} = \Psi(\{\hat{F}^s\}).
+\end{equation}
+其中 $\Phi$ 为任意主流特征提取网络（CNN/Transformer/Hybrid），$\Gamma$ 在若干关键层插入 LODA-Conv，$\Psi$ 为热力图解码器。
+
+\subsection{关键点热力图预测与主任务监督}
+\subsubsection{关键点解码}
+从第 $m$ 个关键点热力图 $\hat{H}_m(\mathbf{p})$ 解码坐标。可用 soft-argmax：
+\begin{equation}
+\hat{\mathbf{k}}_m=\sum_{\mathbf{p}} \mathbf{p}\cdot \mathrm{softmax}\big(\beta \hat{H}_m(\mathbf{p})\big),
+\end{equation}
+其中 $\beta$ 为温度系数；亦可使用峰值提取 $\arg\max_{\mathbf{p}}\hat{H}_m(\mathbf{p})$。
+
+\subsubsection{主任务损失}
+GT热力图 $H^{gt}_m$ 由二维高斯生成，主任务损失采用MSE（可替换为focal heatmap）：
+\begin{equation}
+\mathcal{L}_{hm}=\sum_{m=1}^{M}\|\hat{H}_m - H_m^{gt}\|_2^2.
+\end{equation}
+
+\subsection{几何派生：从关键点到中心线（用于SREG与LODA-Conv约束）}
+\subsubsection{椎体中心点序列}
+定义第 $i$ 个椎体中心点为关键点均值：
+\begin{equation}
+\hat{\mathbf{c}}_i=\frac{1}{Q}\sum_{m=1}^{Q}\mathrm{sg}\big(\hat{\mathbf{k}}^{(m)}_i\big),
+\label{eq:center}
+\end{equation}
+其中 $\mathrm{sg}(\cdot)$ 表示 stop-gradient，用于在训练早期提高稳定性并避免潜在梯度环路。该操作可在消融实验中讨论其必要性。
+
+\subsubsection{切向与法向向量}
+相邻方向向量：
+\begin{equation}
+\hat{\mathbf{u}}_{i,i+1}=\frac{\hat{\mathbf{c}}_{i+1}-\hat{\mathbf{c}}_i}{\|\hat{\mathbf{c}}_{i+1}-\hat{\mathbf{c}}_i\|_2+\epsilon}.
+\end{equation}
+局部切向与法向定义为：
+\begin{equation}
+\hat{\mathbf{t}}_i=\mathrm{sg}\left(\frac{\hat{\mathbf{u}}_{i-1,i}+\hat{\mathbf{u}}_{i,i+1}}{\|\hat{\mathbf{u}}_{i-1,i}+\hat{\mathbf{u}}_{i,i+1}\|_2+\epsilon}\right),\quad
+\hat{\mathbf{n}}_i=
+\begin{bmatrix}
+0 & -1\\
+1 & 0
+\end{bmatrix}\hat{\mathbf{t}}_i.
+\label{eq:tn}
+\end{equation}
+
+\subsubsection{无量纲形状比（宽高比）}
+为避免尺度不稳，引入无量纲形状比 $r_i$。以四角点为例，定义近似宽度与高度：
+\begin{align}
+\hat{w}_i &= \frac{1}{2}\Big(\|\hat{\mathbf{k}}^{(R1)}_i-\hat{\mathbf{k}}^{(L1)}_i\|_2 + \|\hat{\mathbf{k}}^{(R2)}_i-\hat{\mathbf{k}}^{(L2)}_i\|_2\Big),\\
+\hat{h}_i &= \frac{1}{2}\Big(\|\hat{\mathbf{k}}^{(U1)}_i-\hat{\mathbf{k}}^{(D1)}_i\|_2 + \|\hat{\mathbf{k}}^{(U2)}_i-\hat{\mathbf{k}}^{(D2)}_i\|_2\Big),\\
+r_i &= \mathrm{sg}\left(\frac{\hat{w}_i}{\hat{h}_i+\epsilon}\right).
+\label{eq:ratio}
+\end{align}
+（注：角点索引按数据标注顺序映射。）
+
+\subsection{SREG：尺度无关相对能量门控（Scale-free Relative Energy Gating）}
+
+\subsubsection{无量纲局部转角能量（Scale-free Local Turning Energy）}
+我们将脊柱中心线视为由椎体中心点 $\{\hat{\mathbf{c}}_i\}_{i=1}^{N}$ 构成的离散链。定义相邻段的单位方向向量
+\begin{equation}
+\hat{\mathbf{u}}_{i,i+1}=\frac{\hat{\mathbf{c}}_{i+1}-\hat{\mathbf{c}}_{i}}{\|\hat{\mathbf{c}}_{i+1}-\hat{\mathbf{c}}_{i}\|_2+\epsilon},
+\end{equation}
+则第 $i$ 个节点处的无量纲转角能量定义为
+\begin{equation}
+\rho_i
+=1-\cos\big(\hat{\mathbf{u}}_{i-1,i},\hat{\mathbf{u}}_{i,i+1}\big)
+=1-\frac{\hat{\mathbf{u}}_{i-1,i}^\top \hat{\mathbf{u}}_{i,i+1}}
+{\|\hat{\mathbf{u}}_{i-1,i}\|_2\,\|\hat{\mathbf{u}}_{i,i+1}\|_2+\epsilon},
+\quad i=2,\dots,N-1.
+\label{eq:rho}
+\end{equation}
+由于 $\rho_i$ 仅由夹角决定，$\rho_i\in[0,2]$，并且对坐标整体缩放 $\hat{\mathbf{c}}_i\mapsto s\hat{\mathbf{c}}_i$（$s>0$）保持不变，因此天然具备尺度无关性（scale-free）。
+
+\subsubsection{混合鲁棒尺度归一（MAD + Median）与可学习温度}
+仅依赖 $\rho_i$ 的绝对大小仍可能受到个体差异影响：不同患者/不同严重程度的整体弯曲背景不同，导致相同 $\rho_i$ 的语义（“正常弯曲”或“异常突变”）不一致。因此我们对 $\{\rho_i\}$ 进行\textbf{相对化}，引入鲁棒的背景尺度 $S$。考虑到仅使用 MAD 在近直样本上可能过小、从而使门控过于敏感，我们采用\textbf{混合鲁棒尺度}：
+\begin{align}
+\mu_\rho &= \mathrm{median}(\{\rho_i\}) , \\
+\mathrm{MAD}_\rho &= \mathrm{median}\big(\{|\rho_i-\mu_\rho|\}\big), \\
+S &= \mathrm{MAD}_\rho + \gamma\cdot \mu_\rho + \epsilon,
+\label{eq:hybrid_scale}
+\end{align}
+其中 $\gamma\ge 0$ 为可学习或固定的混合系数。该设计兼具两点优点：（1）对离群突变点鲁棒（MAD），（2）在整体弯曲能量较低时仍提供合理尺度地板（Median项），避免门控过早饱和。
+
+基于相对能量 $\rho_i / S$，我们定义门控函数为
+\begin{equation}
+Gate_i=\lambda_{\min}+(1-\lambda_{\min})\exp\left(-\frac{\rho_i}{\tau\cdot S}\right),
+\label{eq:gate}
+\end{equation}
+其中 $\tau>0$ 为可学习温度（temperature），控制门控对突变的敏感度；$\lambda_{\min}\in(0,1)$ 为门控下界，防止在极端突变处 $Gate_i\rightarrow 0$ 导致梯度断流或训练不稳定。
+（在我们的经验设置中，$\tau$ 的初始化取 $2$ 能获得更连续、不过度“硬阈值化”的门控曲线。）
+
+\subsubsection{门控用于连续性正则的自适应加权（Adaptive Regularization Weighting）}
+为避免门控直接抑制特征通道带来的优化风险，我们默认将 $Gate_i$ 作为\textbf{连续性/自然性正则}的权重，对离散链的弯曲能量进行自适应惩罚：
+\begin{equation}
+\mathcal{L}_{cont}=\sum_{i=2}^{N-1} Gate_i\cdot \rho_i.
+\label{eq:lcont}
+\end{equation}
+直觉上，若局部转角能量与整体背景一致（平滑正常段），则 $Gate_i$ 较大，从而增强结构一致性约束以提升关键点稳定性；若出现显著突变（潜在病理奇点），则 $Gate_i$ 自动减小，从而减弱平滑约束、保留真实结构突变，降低由过平滑导致的病理偏差（over-smoothing bias）。
+
+\subsection{LODA-Conv：环路无关的正交散布约束可变形卷积}
+\subsubsection{可变形卷积形式}
+对输入特征 $x$，输出位置 $\mathbf{p}_0$：
+\begin{equation}
+y(\mathbf{p}_0)=\sum_{k=1}^{K} w_k\cdot x\left(\mathbf{p}_0+\mathbf{p}_k+\Delta\mathbf{p}_k\right),
+\label{eq:dcn}
+\end{equation}
+其中 $\mathbf{p}_k$ 为规则网格偏移，$\Delta\mathbf{p}_k$ 为可学习偏移。
+
+\subsubsection{解耦偏移预测（避免几何-语义前向耦合）}
+偏移由轻量网络 $g(\cdot)$ 从局部特征预测：
+\begin{equation}
+\Delta\mathbf{P}=g(F)\in\mathbb{R}^{K\times 2}.
+\label{eq:offset}
+\end{equation}
+关键点：$g(\cdot)$ 不直接使用当前中心线/切线作为输入，从而避免“预测几何 $\rightarrow$ 引导采样 $\rightarrow$ 影响几何”的前向耦合链路。
+
+\subsubsection{正交散布约束：仅约束法向覆盖，保留切向自由度}
+我们不对偏移的切向方向作硬对齐，而是约束其在法向方向上的\textbf{散布}满足椎体块状形状先验。定义投影：
+\begin{equation}
+d_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{n}}_i,\quad s_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{t}}_i,
+\end{equation}
+并以方差刻画散布幅度：
+\begin{equation}
+\mathcal{D}^n_i=\sqrt{\mathrm{Var}_k(d_k)+\epsilon},\quad
+\mathcal{D}^t_i=\sqrt{\mathrm{Var}_k(s_k)+\epsilon}.
+\end{equation}
+结合无量纲形状比 $r_i$（式\ref{eq:ratio}），我们约束散布比值：
+\begin{equation}
+\mathcal{L}_{ortho}=\sum_{i=1}^{N}\left\|
+\frac{\mathcal{D}^n_i}{\mathcal{D}^t_i+\epsilon}-\beta\cdot r_i
+\right\|_2^2,
+\label{eq:lortho}
+\end{equation}
+其中 $\beta$ 为可学习标量或常数。该设计同时实现：
+\begin{itemize}
+    \item \textbf{形状对齐}：法向散布与椎体宽高比一致，避免采样退化为细长一维；
+    \item \textbf{尺度鲁棒}：约束量为无量纲比值，抵抗缩放/分辨率变化；
+    \item \textbf{环路抑制}：几何量采用 $\mathrm{sg}(\cdot)$ 派生，降低梯度循环风险。
+\end{itemize}
+
+\subsubsection{弱防漂移正则}
+为避免偏移无界增大引起采样漂移，加入弱正则：
+\begin{equation}
+\mathcal{L}_{drift}=\sum_{k=1}^{K}\|\Delta\mathbf{p}_k\|_2^2.
+\label{eq:ldrift}
+\end{equation}
+
+\subsection{总目标函数}
+综合主任务监督与两项机制的正则项，整体损失为：
+\begin{equation}
+\mathcal{L}=
+\lambda_{hm}\mathcal{L}_{hm}
++\lambda_{ortho}\mathcal{L}_{ortho}
++\lambda_{drift}\mathcal{L}_{drift}
++\lambda_{cont}\mathcal{L}_{cont}.
+\label{eq:overall}
+\end{equation}
+其中 $\lambda_{\cdot}$ 为权重超参数；$\tau$ 与（可选）$\beta$ 可通过梯度学习。
+
+\subsection{训练策略（稳定性优先）}
+为避免几何约束在训练早期扰动关键点学习，我们采用分阶段启用策略：
+\begin{itemize}
+    \item \textbf{阶段A：基础学习} 仅优化 $\mathcal{L}_{hm}$，获得稳定的关键点响应；
+    \item \textbf{阶段B：启用LODA-Conv} 插入可变形采样并开启 $\mathcal{L}_{ortho}$ 与弱 $\mathcal{L}_{drift}$；
+    \item \textbf{阶段C：启用SREG} 计算 $\rho_i$ 与 $Gate_i$，开启加权连续性正则 $\mathcal{L}_{cont}$，并学习 $\tau$。
+\end{itemize}
+在所有阶段，几何派生量默认 stop-gradient；可在消融中对比 stop-gradient、teacher-EMA 或完全可导设置对稳定性与性能的影响。
+
+\subsection{推理阶段}
+推理时输出关键点热力图并解码得到 $\hat{\mathbf{k}}^{(m)}_i$。中心线、端板方向与Cobb角等临床指标在后处理中由关键点几何关系计算得到（本文草稿阶段暂不展开具体Cobb计算协议）。
+
+\subsection{建议的关键消融（用于理论验证与可复现实验）}
+\begin{enumerate}
+    \item 基线：仅 $\mathcal{L}_{hm}$（无LODA-Conv，无SREG）；
+    \item + 可变形采样（无约束）：加入式(\ref{eq:dcn})但不加 $\mathcal{L}_{ortho}$；
+    \item + LODA-Conv：加入 $\mathcal{L}_{ortho}$，对比 $\mathrm{sg}(\cdot)$ 是否启用；
+    \item 先验形式：散布比值约束（式\ref{eq:lortho}）vs 绝对宽度（对照用）；
+    \item + SREG：加入 $\mathcal{L}_{cont}$，对比尺度估计 MA vs MAD、$\lambda_{\min}$ 取值；
+    \item 稳定性：记录训练早期梯度范数、offset分布统计（均值/方差/极值）、loss爆炸率；
+    \item 压力测试：端椎体、遮挡、跨分辨率缩放扰动（scale stress test）。
+\end{enumerate}
+
+
+
+\end{document}

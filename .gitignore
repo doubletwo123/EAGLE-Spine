@@ -1,0 +1,15 @@
+# 数据
+/data/
+# 日志文件
+*.log
+# 历史记录
+*.history
+# 临时文件
+*.tmp
+# idea编译文件
+*.bbl
+*.gz
+*.pdf
+
+# python编译文件
+__pycache__/
