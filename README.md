@@ -1,11 +1,13 @@
 # EAGLE-Spine
 
-PyTorch implementation of the SREG / DRE-Gating module for spine centerline geometry. The current model uses a hybrid scale definition (MAD + gamma * median) to compute scale-free gating and a continuity regularizer.
+EAGLE-Spine (Energy-Adaptive Geometry-Loop-free Enhancement) is a PyTorch research prototype for spine landmark detection that combines scale-free gating with loop-free deformable alignment. The current codebase focuses on two core mechanisms: SREG (Scale-free Relative Energy Gating) and LODA-Conv (Loop-free Orthogonal Deformable Alignment Conv).
 
 ## Contents
 
 - `model/sreg.py`: SREG / DRE-Gating module (v2) implementation.
+- `model/lda_conv.py`: LODA-Conv module with orthogonal dispersion constraint.
 - `test/sreg_test.py`: Demo/test runner that generates synthetic spine centerlines and prints diagnostic outputs.
+- `test/lda_conv_test.py`: Demo/test runner for LODA-Conv output and loss stats.
 - `idea_script/`: Project notes and LaTeX assets.
 
 ## Requirements
@@ -15,13 +17,20 @@ PyTorch implementation of the SREG / DRE-Gating module for spine centerline geom
 
 ## Quick Start
 
-Run the demo/test script:
+Run the demo/test scripts:
 
 ```bash
 python test/sreg_test.py
+python test/lda_conv_test.py
 ```
 
-This script generates three synthetic samples (normal, smooth curve, pathological kink), prints `rho` ranges, `gate` behavior, and a scale invariance check.
+The SREG script generates three synthetic samples (normal, smooth curve, pathological kink), prints `rho` ranges, `gate` behavior, and a scale invariance check. The LODA-Conv script prints output shapes, orthogonality loss, and basic stats.
+
+## Core Ideas
+
+- SREG: computes a scale-free local turning energy `rho` and applies a hybrid robust scale `S = MAD + gamma * median` to derive gating weights for continuity regularization.
+- LODA-Conv: predicts deformable offsets without geometry in the forward path and applies an orthogonal dispersion loss aligned with tangent/normal directions derived from centerline geometry.
+- Loop-free geometry: centerline, tangent, normal, and ratio terms are typically stop-gradient to avoid feedback loops.
 
 ## Usage
 
@@ -40,3 +49,4 @@ print(out.rho.shape, out.gate.shape, out.scale)
 
 - `gate` is set to 1 for invalid points; endpoints have `rho = 0`.
 - `scale` is computed per-sample using `mad + gamma * median` with a small epsilon for stability.
+- Suggested training phases (from `idea_script/idea.tex`): warm up with heatmap loss, then enable LODA-Conv with `L_ortho`, and finally enable SREG continuity regularization.
