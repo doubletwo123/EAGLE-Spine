@@ -43,7 +43,7 @@ data/
 
 - `data/train/`: AP spine X-ray images (JPEG). File names match entries in `filenames.csv`.
 - `data/train_txt/filenames.csv`: One image file name per line.
-- `data/train_txt/landmarks.csv`: Landmark coordinates per image. Each line is a flat list of normalized `(x, y)` pairs in image coordinates (range 0-1). The ordering follows the dataset's vertebra/landmark convention.
+- `data/train_txt/landmarks.csv`: Landmark coordinates per image. **The first 68 values represent all x-coordinates and the latter 68 represent all y-coordinates. Points are ordered from top to bottom by y-value, with two points per layer arranged alternately (left and right).**
 - `data/train_txt/angles.csv`: Per-image angle targets. Each line contains three Cobb-related angles in degrees.
 
 ## Core Ideas
