@@ -9,6 +9,7 @@ EAGLE-Spine (Energy-Adaptive Geometry-Loop-free Enhancement) is a PyTorch resear
 - `test/sreg_test.py`: Demo/test runner that generates synthetic spine centerlines and prints diagnostic outputs.
 - `test/lda_conv_test.py`: Demo/test runner for LODA-Conv output and loss stats.
 - `idea_script/`: Project notes and LaTeX assets.
+- `data/`: Sample dataset with AP X-ray images and CSV annotations.
 
 ## Requirements
 
@@ -25,6 +26,25 @@ python test/lda_conv_test.py
 ```
 
 The SREG script generates three synthetic samples (normal, smooth curve, pathological kink), prints `rho` ranges, `gate` behavior, and a scale invariance check. The LODA-Conv script prints output shapes, orthogonality loss, and basic stats.
+
+## Dataset Layout
+
+The repo includes a sample dataset under `data/` with the following structure:
+
+```
+data/
+  train/
+    *.jpg
+  train_txt/
+    filenames.csv
+    landmarks.csv
+    angles.csv
+```
+
+- `data/train/`: AP spine X-ray images (JPEG). File names match entries in `filenames.csv`.
+- `data/train_txt/filenames.csv`: One image file name per line.
+- `data/train_txt/landmarks.csv`: Landmark coordinates per image. Each line is a flat list of normalized `(x, y)` pairs in image coordinates (range 0-1). The ordering follows the dataset's vertebra/landmark convention.
+- `data/train_txt/angles.csv`: Per-image angle targets. Each line contains three Cobb-related angles in degrees.
 
 ## Core Ideas
 
