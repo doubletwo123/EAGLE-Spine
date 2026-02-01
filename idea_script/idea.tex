@@ -6,6 +6,7 @@
 \usepackage{setspace}
 \usepackage[numbers,sort&compress]{natbib}
 \usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+\usepackage[thmmarks]{ntheorem}
 
 \geometry{left=2.3cm,right=2.3cm,top=2.2cm,bottom=2.2cm}
 \setstretch{1.25}
@@ -38,7 +39,7 @@
 整体上，EAGLE-Spine 包含两项关键机制：
 \begin{itemize}
     \item \textbf{SREG（Scale-free Relative Energy Gating）}：无量纲相对能量门控，基于中心线局部转角能量构造门控系数，调节连续性正则强度，避免病理奇点被抹平；
-    \item \textbf{LODA-Conv (loop-free orthogonal deformable alignment }conv): 环路无关的正交散布约束可变形卷积，通过法向散布先验引导采样覆盖椎体块状结构，同时切断由预测几何量引入的梯度循环风险。
+    \item \textbf{LODA-Conv (loop-free orthogonal deformable alignment conv)}：环路无关的正交散布约束可变形卷积，通过法向散布先验引导采样覆盖椎体块状结构，同时切断由预测几何量引入的梯度循环风险。
 \end{itemize}
 
 \subsection{问题定义与符号约定}
@@ -152,52 +153,65 @@ Gate_i=\lambda_{\min}+(1-\lambda_{\min})\exp\left(-\frac{\rho_i}{\tau\cdot S}\ri
 直觉上，若局部转角能量与整体背景一致（平滑正常段），则 $Gate_i$ 较大，从而增强结构一致性约束以提升关键点稳定性；若出现显著突变（潜在病理奇点），则 $Gate_i$ 自动减小，从而减弱平滑约束、保留真实结构突变，降低由过平滑导致的病理偏差（over-smoothing bias）。
 
 \subsection{LODA-Conv：环路无关的正交散布约束可变形卷积}
+
 \subsubsection{可变形卷积形式}
-对输入特征 $x$，输出位置 $\mathbf{p}_0$：
+给定输入特征图 $x$，可变形卷积在输出位置 $\mathbf{p}_0$ 的计算形式为
 \begin{equation}
-y(\mathbf{p}_0)=\sum_{k=1}^{K} w_k\cdot x\left(\mathbf{p}_0+\mathbf{p}_k+\Delta\mathbf{p}_k\right),
+y(\mathbf{p}_0)=\sum_{k=1}^{K} w_k\cdot x\left(\mathbf{p}_0+\mathbf{p}_k+\Delta\mathbf{p}_k(\mathbf{p}_0)\right),
 \label{eq:dcn}
 \end{equation}
-其中 $\mathbf{p}_k$ 为规则网格偏移，$\Delta\mathbf{p}_k$ 为可学习偏移。
+其中 $\mathbf{p}_k$ 为规则采样网格偏移（如 $3\times 3$ 对应 $K=9$），$\Delta\mathbf{p}_k(\mathbf{p}_0)$ 为在位置 $\mathbf{p}_0$ 处预测得到的可学习偏移（以双线性插值在连续坐标取样）。
 
-\subsubsection{解耦偏移预测（避免几何-语义前向耦合）}
-偏移由轻量网络 $g(\cdot)$ 从局部特征预测：
+\subsubsection{解耦偏移预测（避免几何-语义前向耦合与闭环误差）}
+偏移由轻量预测网络 $g(\cdot)$ 仅从局部语义特征预测：
 \begin{equation}
-\Delta\mathbf{P}=g(F)\in\mathbb{R}^{K\times 2}.
+\Delta\mathbf{P}(\mathbf{p}_0)=g\big(F(\mathbf{p}_0)\big)\in\mathbb{R}^{K\times 2},
 \label{eq:offset}
 \end{equation}
-关键点：$g(\cdot)$ 不直接使用当前中心线/切线作为输入，从而避免“预测几何 $\rightarrow$ 引导采样 $\rightarrow$ 影响几何”的前向耦合链路。
+其中 $F(\mathbf{p}_0)$ 为 $\mathbf{p}_0$ 处的局部特征。关键点在于：$g(\cdot)$ 的输入\textbf{不包含}当前迭代的中心线、切线或关键点预测，从而避免形成
+\[
+\text{几何预测}\rightarrow \text{采样方向/位置}\rightarrow \text{特征分布}\rightarrow \text{几何预测}
+\]
+的前向耦合链路，降低闭环误差积累导致的特征坍缩风险。几何信息仅用于构造约束项（见下），并默认采用 stop-gradient（$\mathrm{sg}(\cdot)$）以进一步抑制梯度循环。
 
-\subsubsection{正交散布约束：仅约束法向覆盖，保留切向自由度}
-我们不对偏移的切向方向作硬对齐，而是约束其在法向方向上的\textbf{散布}满足椎体块状形状先验。定义投影：
+\subsubsection{正交散布约束（Orthogonal Dispersion Constraint）：仅约束法向覆盖，保留切向自由度}
+在遮挡/低质/端椎体场景中，传统可变形采样易被细长的干扰边缘（如肋骨）吸引，导致采样域漂移。为引导采样覆盖椎体\textbf{块状结构}而非沿中心线“一维排队”，我们不对偏移的切向方向作硬对齐，而是约束其在法向方向的\textbf{散布（dispersion）}满足形状先验。
+
+对第 $i$ 个椎体，给定其切向/法向单位向量 $\hat{\mathbf{t}}_i,\hat{\mathbf{n}}_i$（由中心线派生，并默认 $\mathrm{sg}$），将偏移投影到法/切向：
 \begin{equation}
-d_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{n}}_i,\quad s_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{t}}_i,
+d_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{n}}_i,\quad
+s_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{t}}_i.
 \end{equation}
-并以方差刻画散布幅度：
+以方差刻画散布幅度：
 \begin{equation}
 \mathcal{D}^n_i=\sqrt{\mathrm{Var}_k(d_k)+\epsilon},\quad
 \mathcal{D}^t_i=\sqrt{\mathrm{Var}_k(s_k)+\epsilon}.
 \end{equation}
-结合无量纲形状比 $r_i$（式\ref{eq:ratio}），我们约束散布比值：
+其中 $\mathcal{D}^n_i$ 表示采样域在法向的“横向覆盖宽度”，$\mathcal{D}^t_i$ 表示切向上的延展。结合由关键点派生的无量纲形状比 $r_i$（式\ref{eq:ratio}），我们约束散布比值为：
 \begin{equation}
 \mathcal{L}_{ortho}=\sum_{i=1}^{N}\left\|
 \frac{\mathcal{D}^n_i}{\mathcal{D}^t_i+\epsilon}-\beta\cdot r_i
 \right\|_2^2,
 \label{eq:lortho}
 \end{equation}
-其中 $\beta$ 为可学习标量或常数。该设计同时实现：
+其中 $\beta\ge 0$ 为可学习标量（用于对齐数值尺度）。该约束具有三个关键特性：
 \begin{itemize}
-    \item \textbf{形状对齐}：法向散布与椎体宽高比一致，避免采样退化为细长一维；
-    \item \textbf{尺度鲁棒}：约束量为无量纲比值，抵抗缩放/分辨率变化；
-    \item \textbf{环路抑制}：几何量采用 $\mathrm{sg}(\cdot)$ 派生，降低梯度循环风险。
+    \item \textbf{形状对齐（Block-wise Coverage）}：通过控制法向散布，使采样点在椎体横向方向展开，抑制采样退化为细长一维排列，从而在遮挡/端椎体处更不易漂移；
+    \item \textbf{尺度鲁棒（Scale-free Ratio）}：约束量为无量纲比值，天然抵抗分辨率/缩放变化；
+    \item \textbf{环路抑制（Loop-free Training）}：几何量仅用于约束空间并默认 $\mathrm{sg}$，而偏移预测 $g(\cdot)$ 不接收几何输入，有效切断几何--采样--特征的正反馈回路。
 \end{itemize}
 
+\paragraph{实现细节（用于稳定训练的局部采样）}
+为避免为全图建立椎体归属映射，我们在训练中仅在椎体中心点附近的少量采样位置评估式(\ref{eq:lortho})：将中心点投影到特征图坐标，在其邻域（如 $3\times 3$ patch）通过双线性方式读取对应位置的偏移 $\Delta\mathbf{P}$，并在这些位置上汇聚估计 $\mathcal{D}^n_i,\mathcal{D}^t_i$。该做法既稳定又开销可控。
+
 \subsubsection{弱防漂移正则}
-为避免偏移无界增大引起采样漂移，加入弱正则：
+为避免偏移无界增大导致采样点远离目标区域，引入弱正则：
 \begin{equation}
-\mathcal{L}_{drift}=\sum_{k=1}^{K}\|\Delta\mathbf{p}_k\|_2^2.
+\mathcal{L}_{drift}=\sum_{k=1}^{K}\|\Delta\mathbf{p}_k\|_2^2,
 \label{eq:ldrift}
 \end{equation}
+实际训练中设置较小权重以避免抑制可变形表达能力。
+
 
 \subsection{总目标函数}
 综合主任务监督与两项机制的正则项，整体损失为：
@@ -228,7 +242,7 @@ d_k=\Delta\mathbf{p}_k\cdot \hat{\mathbf{n}}_i,\quad s_k=\Delta\mathbf{p}_k\cdot
     \item 基线：仅 $\mathcal{L}_{hm}$（无LODA-Conv，无SREG）；
     \item + 可变形采样（无约束）：加入式(\ref{eq:dcn})但不加 $\mathcal{L}_{ortho}$；
     \item + LODA-Conv：加入 $\mathcal{L}_{ortho}$，对比 $\mathrm{sg}(\cdot)$ 是否启用；
-    \item 先验形式：散布比值约束（式\ref{eq:lortho}）vs 绝对宽度（对照用）；
+    \item 先验形式：散布比值约束（式\ref{eq:lortho}） vs 绝对宽度（对照用）；
     \item + SREG：加入 $\mathcal{L}_{cont}$，对比尺度估计 MA vs MAD、$\lambda_{\min}$ 取值；
     \item 稳定性：记录训练早期梯度范数、offset分布统计（均值/方差/极值）、loss爆炸率；
     \item 压力测试：端椎体、遮挡、跨分辨率缩放扰动（scale stress test）。
